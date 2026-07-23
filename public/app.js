@@ -398,18 +398,49 @@ function showSuccess(downloadUrl, filename) {
     
     // Check if downloadUrl exists and is valid
     if (downloadUrl) {
-        const fullUrl = downloadUrl.startsWith('http') ? downloadUrl : `http://localhost:3001${downloadUrl}`;
+        // Use dynamic origin for both local and production
+        const fullUrl = downloadUrl.startsWith('http') ? downloadUrl : `${window.location.origin}${downloadUrl}`;
         downloadLink.href = fullUrl;
+        
+        // Set download attribute
         if (filename) {
             downloadLink.download = filename;
         }
         
         resultSection.classList.remove('hidden');
         
-        // Auto-download the video immediately
+        // Enhanced auto-download that works on mobile
         setTimeout(() => {
-            downloadLink.click();
-            console.log('Auto-downloading video...');
+            console.log('Starting download:', fullUrl);
+            
+            // Method 1: Try direct download link click
+            try {
+                downloadLink.click();
+            } catch (e) {
+                console.log('Method 1 failed, trying Method 2');
+            }
+            
+            // Method 2: Create temporary anchor with download attribute (better for mobile)
+            setTimeout(() => {
+                try {
+                    const a = document.createElement('a');
+                    a.href = fullUrl;
+                    a.download = filename || 'video.mp4';
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    
+                    // Add to body, click, then remove
+                    document.body.appendChild(a);
+                    a.click();
+                    
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                    }, 100);
+                } catch (e) {
+                    console.error('Auto-download failed:', e);
+                    // If auto-download fails, at least the button is visible
+                }
+            }, 300);
         }, 500);
     } else {
         showError(t('errorOccurred'));

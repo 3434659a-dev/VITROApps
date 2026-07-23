@@ -10,7 +10,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
-app.use('/downloads', express.static('downloads'));
+
+// Custom middleware for downloads - Force download instead of opening
+app.use('/downloads', (req, res, next) => {
+    const filePath = path.join(__dirname, 'downloads', path.basename(req.path));
+    const filename = path.basename(req.path);
+    
+    // Check if file exists
+    fs.access(filePath).then(() => {
+        // Force download with proper headers
+        res.setHeader('Content-Type', 'application/octet-stream');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Transfer-Encoding', 'binary');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        
+        // Send file
+        res.sendFile(filePath, (err) => {
+            if (err) {
+                console.error('Error sending file:', err);
+                res.status(404).send('File not found');
+            }
+        });
+    }).catch(() => {
+        res.status(404).send('File not found');
+    });
+});
 
 // Store active downloads with their progress
 const activeDownloads = new Map();
