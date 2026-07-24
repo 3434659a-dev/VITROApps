@@ -409,7 +409,7 @@ function showSuccess(downloadUrl, filename) {
         
         resultSection.classList.remove('hidden');
         
-        // Enhanced auto-download that works on mobile
+        // Wait 2 seconds to ensure file is ready on Railway
         setTimeout(() => {
             console.log('Starting download:', fullUrl);
             

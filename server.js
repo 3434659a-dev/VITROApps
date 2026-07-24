@@ -21,8 +21,26 @@ app.get('/downloads/:filename', async (req, res) => {
     const filename = path.basename(req.params.filename);
     const filePath = path.join(__dirname, 'downloads', filename);
     
+    console.log(`📥 Download request for: ${filename}`);
+    
     try {
-        // Check if file exists
+        // Check if file exists - WAIT if it doesn't (Railway timing issue)
+        let attempts = 0;
+        const maxAttempts = 30; // Wait up to 30 seconds
+        
+        while (attempts < maxAttempts) {
+            try {
+                await fs.access(filePath);
+                break; // File exists!
+            } catch {
+                // File doesn't exist yet, wait 1 second
+                console.log(`⏳ Waiting for file... (attempt ${attempts + 1}/${maxAttempts})`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                attempts++;
+            }
+        }
+        
+        // Final check
         await fs.access(filePath);
         const stats = await fs.stat(filePath);
         
@@ -33,42 +51,56 @@ app.get('/downloads/:filename', async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         res.setHeader('Content-Length', stats.size);
         res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
+        res.setHeader('Cache-Control', 'public, max-age=0');
         res.setHeader('X-Content-Type-Options', 'nosniff');
         
-        // Stream the file
-        const fileStream = require('fs').createReadStream(filePath);
-        
-        fileStream.on('error', (error) => {
-            console.error('Stream error:', error);
-            if (!res.headersSent) {
-                res.status(500).send('Error streaming file');
-            }
-        });
-        
-        fileStream.pipe(res);
-        
-        // Delete file after sending (Railway cleanup)
-        fileStream.on('end', () => {
-            console.log(`✅ File sent successfully: ${filename}`);
-            // Clean up after 10 seconds
-            setTimeout(async () => {
-                try {
-                    await fs.unlink(filePath);
-                    console.log(`🗑️ Cleaned up: ${filename}`);
-                } catch (err) {
-                    console.error('Cleanup error:', err);
+        // Support range requests (for resumable downloads)
+        const range = req.headers.range;
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+            const chunksize = (end - start) + 1;
+            
+            res.status(206);
+            res.setHeader('Content-Range', `bytes ${start}-${end}/${stats.size}`);
+            res.setHeader('Content-Length', chunksize);
+            
+            const fileStream = require('fs').createReadStream(filePath, { start, end });
+            fileStream.pipe(res);
+        } else {
+            // Full file download
+            const fileStream = require('fs').createReadStream(filePath);
+            
+            fileStream.on('error', (error) => {
+                console.error('❌ Stream error:', error);
+                if (!res.headersSent) {
+                    res.status(500).send('Error streaming file');
                 }
-            }, 10000);
-        });
+            });
+            
+            fileStream.on('end', () => {
+                console.log(`✅ File sent successfully: ${filename}`);
+            });
+            
+            fileStream.pipe(res);
+        }
+        
+        // Delete file after 5 MINUTES (not 10 seconds!) - Railway cleanup
+        setTimeout(async () => {
+            try {
+                await fs.unlink(filePath);
+                console.log(`🗑️ Cleaned up: ${filename}`);
+            } catch (err) {
+                // File might already be deleted
+            }
+        }, 5 * 60 * 1000); // 5 minutes
         
     } catch (error) {
-        console.error('File access error:', error);
+        console.error('❌ File access error:', error);
         res.status(404).json({ 
             success: false, 
-            error: 'File not found or expired' 
+            error: 'File not found or not ready yet. Please try again.' 
         });
     }
 });
