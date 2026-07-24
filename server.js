@@ -7,35 +7,70 @@ const { spawn } = require('child_process');
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    exposedHeaders: ['Content-Disposition', 'Content-Length']
+}));
 app.use(express.json());
 app.use(express.static('public'));
 
-// Custom middleware for downloads - Force download instead of opening
-app.use('/downloads', (req, res, next) => {
-    const filePath = path.join(__dirname, 'downloads', path.basename(req.path));
-    const filename = path.basename(req.path);
+// Enhanced download endpoint - Stream file directly with proper headers
+app.get('/downloads/:filename', async (req, res) => {
+    const filename = path.basename(req.params.filename);
+    const filePath = path.join(__dirname, 'downloads', filename);
     
-    // Check if file exists
-    fs.access(filePath).then(() => {
-        // Force download with proper headers
-        res.setHeader('Content-Type', 'application/octet-stream');
+    try {
+        // Check if file exists
+        await fs.access(filePath);
+        const stats = await fs.stat(filePath);
+        
+        console.log(`📤 Serving file: ${filename} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+        
+        // Set proper headers for download
+        res.setHeader('Content-Type', 'video/mp4');
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Transfer-Encoding', 'binary');
+        res.setHeader('Content-Length', stats.size);
+        res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
         
-        // Send file
-        res.sendFile(filePath, (err) => {
-            if (err) {
-                console.error('Error sending file:', err);
-                res.status(404).send('File not found');
+        // Stream the file
+        const fileStream = require('fs').createReadStream(filePath);
+        
+        fileStream.on('error', (error) => {
+            console.error('Stream error:', error);
+            if (!res.headersSent) {
+                res.status(500).send('Error streaming file');
             }
         });
-    }).catch(() => {
-        res.status(404).send('File not found');
-    });
+        
+        fileStream.pipe(res);
+        
+        // Delete file after sending (Railway cleanup)
+        fileStream.on('end', () => {
+            console.log(`✅ File sent successfully: ${filename}`);
+            // Clean up after 10 seconds
+            setTimeout(async () => {
+                try {
+                    await fs.unlink(filePath);
+                    console.log(`🗑️ Cleaned up: ${filename}`);
+                } catch (err) {
+                    console.error('Cleanup error:', err);
+                }
+            }, 10000);
+        });
+        
+    } catch (error) {
+        console.error('File access error:', error);
+        res.status(404).json({ 
+            success: false, 
+            error: 'File not found or expired' 
+        });
+    }
 });
 
 // Store active downloads with their progress
